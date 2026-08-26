@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest & Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+
+# HashSentry Session Checkpoints & Dynamic Output
+checkpoints/*.json
+!checkpoints/.gitkeep
+reports/*.csv
+reports/*.json
+reports/*.txt
+!reports/.gitkeep
+
+# IDEs & System Files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
