@@ -149,7 +149,6 @@ def parse_scrypt_hash(hash_str: str) -> Optional[Tuple[int, int, int, bytes, byt
             return (n, r, p, salt, expected)
     except Exception:
         return None
-    return None
 
 
 def verify_scrypt(candidate: str, target_hash: str) -> bool:

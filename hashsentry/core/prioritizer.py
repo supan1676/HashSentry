@@ -8,7 +8,7 @@ Uses statistical frequency lists, pattern heuristics, and buffer-based priority 
 
 import heapq
 import re
-from typing import Generator, Iterable, List, Optional, Set
+from typing import Generator, Iterable, List, Set
 
 # Top high-frequency password seeds and tokens
 TOP_FREQUENCY_PASSWORDS = [

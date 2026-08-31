@@ -9,12 +9,10 @@ from dataclasses import dataclass
 import itertools
 import multiprocessing as mp
 import os
-import signal
-import sys
 import time
 from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Tuple
 
-from hashsentry.core.handlers import BaseHashHandler, get_handler
+from hashsentry.core.handlers import get_handler
 from hashsentry.execution.checkpoint import delete_checkpoint, save_checkpoint
 
 

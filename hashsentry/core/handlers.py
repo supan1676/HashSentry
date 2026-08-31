@@ -7,7 +7,6 @@ SlowHashHandler: delegated verification via native crypto algorithms.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 from hashsentry.core.hasher import (
     FAST_HASH_PROFILES,
     normalize_algo_name,

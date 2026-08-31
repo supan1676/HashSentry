@@ -12,19 +12,18 @@ Implements the full UIUX wireframe flow:
 
 import argparse
 import os
-import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from hashsentry.core.detector import detect_hash_type
-from hashsentry.core.hasher import FAST_HASH_PROFILES, normalize_algo_name
+from hashsentry.core.hasher import normalize_algo_name
 from hashsentry.core.prioritizer import GuessPrioritizer
-from hashsentry.execution.checkpoint import list_checkpoints, load_checkpoint
+from hashsentry.execution.checkpoint import list_checkpoints
 from hashsentry.execution.manager import CrackResult, ExecutionManager
 from hashsentry.reporting.exporter import (
     build_audit_record,

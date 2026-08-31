@@ -6,7 +6,6 @@ Includes strength scoring, timing, speed, attempts, and policy compliance detail
 """
 
 import csv
-from dataclasses import asdict
 import json
 import os
 import time
