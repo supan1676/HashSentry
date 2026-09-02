@@ -1,10 +1,10 @@
 """
 HashSentry CLI & Interactive Interface
 ========================================
-Implements the full UIUX wireframe flow:
+Implements the full UIUX flow with pure in-memory streaming candidate generation:
 - Authorized-use disclaimer
 - Interactive menus & hash detection
-- Recommended & custom attack strategies
+- Dynamic Pattern expansion (O(1) memory streaming) & custom attack strategies
 - Rich live progress display with speed, ETA, and Ctrl+C checkpointing
 - Strength scoring & multi-format report exports (CSV, JSON, Text)
 - Batch auditing mode & session resumption
@@ -35,17 +35,19 @@ from hashsentry.reporting.exporter import (
 from hashsentry.reporting.scorer import score_password
 from hashsentry.strategies.base import BaseStrategy
 from hashsentry.strategies.brute_force import BruteForceStrategy
-from hashsentry.strategies.dictionary import DictionaryStrategy
 from hashsentry.strategies.mask_hybrid import HybridStrategy, MaskStrategy
+from hashsentry.strategies.pattern import (
+    CHARSET_ALL_PRINTABLE,
+    CHARSET_ALPHANUMERIC,
+    CHARSET_DIGITS,
+    CHARSET_LETTERS,
+    CHARSET_LOWER_NUM,
+    CHARSET_SYMBOLS,
+    PatternStrategy,
+)
 from hashsentry.strategies.rules import RulesStrategy
 
 console = Console()
-
-DEFAULT_WORDLIST = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "wordlists",
-    "sample_wordlist.txt",
-)
 LAST_REPORT_FILE = "reports/last_report.txt"
 
 
@@ -112,62 +114,84 @@ def prompt_hash_and_algo(
     return target_hash, algo
 
 
-def _get_wordlist_path() -> str:
-    """Prompt user for a wordlist path and validate its existence."""
-    has_default = os.path.exists(DEFAULT_WORDLIST)
-    while True:
-        prompt_str = f"Path to wordlist file [[dim]{DEFAULT_WORDLIST}[/dim]]: " if has_default else "Enter path to wordlist file: "
-        wl_input = console.input(prompt_str).strip()
-        if not wl_input and has_default:
-            return DEFAULT_WORDLIST
-        if wl_input and os.path.exists(wl_input):
-            return wl_input
-        console.print("[red]Wordlist file not found. Please enter a valid file path (e.g. wordlist.txt).[/red]")
-
-
 def build_strategy_interactive() -> Tuple[BaseStrategy, Dict[str, Any], bool]:
     """Interactive strategy selection menu."""
     console.print("\n[bold cyan]Select Attack Strategy:[/bold cyan]")
-    console.print("  [bold green]1) Use Recommended[/bold green] (Dictionary + Rules mutation)")
-    console.print("  2) Dictionary only (fast wordlist check)")
-    console.print("  3) Brute-force only (exhaustive search)")
-    console.print("  4) Mask attack (e.g. ?u?l?l?d?d)")
-    console.print("  5) Hybrid attack (Dictionary + brute-forced suffix)")
+    console.print("  [bold green]1) Pattern & Combinatorial Stream[/bold green] (Optional base prefix + streaming A-Z, a-z, 0-9, symbols)")
+    console.print("  2) Mask attack (e.g. ?u?l?l?d?d, bante?a)")
+    console.print("  3) Smart Human Mutations (In-memory rule mutations on root patterns)")
+    console.print("  4) Exhaustive Brute-force (Full length & charset search)")
+    console.print("  5) Hybrid attack (Base word + Mask suffix)")
 
     choice = console.input("\nSelect strategy [default 1]: ").strip() or "1"
     use_prioritizer = False
 
     if choice == "2":
-        wordlist_path = _get_wordlist_path()
-        strat = DictionaryStrategy(wordlist=wordlist_path)
-        params = {"wordlist": wordlist_path}
-    elif choice == "3":
-        cs_choice = console.input("Charset (1: a-z0-9, 2: a-z, 3: full printable) [default 1]: ").strip() or "1"
-        if cs_choice == "2":
-            charset = "abcdefghijklmnopqrstuvwxyz"
-        elif cs_choice == "3":
-            charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
-        else:
-            charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-        max_len = int(console.input("Max password length [default 4]: ").strip() or "4")
-        strat = BruteForceStrategy(charset=charset, min_length=1, max_length=max_len)
-        params = {"charset": charset, "min_length": 1, "max_length": max_len}
-    elif choice == "4":
-        mask = console.input("Enter mask (e.g. ?u?l?l?d?d) [default ?u?l?l?d?d]: ").strip() or "?u?l?l?d?d"
+        mask = console.input("Enter mask (e.g. ?u?l?l?d?d or bante?a) [default ?u?l?l?d?d]: ").strip() or "?u?l?l?d?d"
         strat = MaskStrategy(mask=mask)
         params = {"mask": mask}
-    elif choice == "5":
-        wordlist_path = _get_wordlist_path()
-        suffix = console.input("Enter suffix mask (e.g. ?d?d?d?d) [default ?d?d?d?d]: ").strip() or "?d?d?d?d"
-        strat = HybridStrategy(wordlist=wordlist_path, suffix_mask=suffix)
-        params = {"wordlist": wordlist_path, "suffix_mask": suffix}
-    else:  # 1 or default
-        wordlist_path = _get_wordlist_path()
-        strat = RulesStrategy(wordlist=wordlist_path)
-        params = {"wordlist": wordlist_path}
+    elif choice == "3":
+        base = console.input("Enter base seed word(s) (e.g. 'admin' or leave blank for default seeds): ").strip()
+        strat = RulesStrategy(base_words=base if base else None)
+        params = {"base_words": base}
         p_choice = console.input("Enable statistical guess prioritization? (y/N): ").strip().lower()
         if p_choice == "y":
             use_prioritizer = True
+    elif choice == "4":
+        console.print("\nSelect character set for brute-force:")
+        console.print("  1) Lowercase + Digits (a-z0-9) [default]")
+        console.print("  2) Lowercase letters only (a-z)")
+        console.print("  3) Full 94 Printable ASCII (A-Z, a-z, 0-9, symbols)")
+        cs_choice = console.input("Select charset [default 1]: ").strip() or "1"
+        if cs_choice == "2":
+            charset = "abcdefghijklmnopqrstuvwxyz"
+        elif cs_choice == "3":
+            charset = CHARSET_ALL_PRINTABLE
+        else:
+            charset = CHARSET_LOWER_NUM
+        max_len = int(console.input("Max password length [default 4]: ").strip() or "4")
+        strat = BruteForceStrategy(charset=charset, min_length=1, max_length=max_len)
+        params = {"charset": charset, "min_length": 1, "max_length": max_len}
+    elif choice == "5":
+        base = console.input("Enter base word (e.g. 'admin'): ").strip() or "admin"
+        suffix = console.input("Enter suffix mask (e.g. ?d?d?d?d) [default ?d?d?d?d]: ").strip() or "?d?d?d?d"
+        strat = HybridStrategy(base_words=base, suffix_mask=suffix)
+        params = {"base_words": base, "suffix_mask": suffix}
+    else:  # 1 or default (Pattern Strategy)
+        base_prefix = console.input("Enter base prefix (e.g. 'bante' or press Enter if none): ").strip()
+        console.print("\nSelect character set for combinations:")
+        console.print("  [bold green]1) All 94 Printable ASCII[/bold green] (A-Z, a-z, 0-9, special symbols) [default]")
+        console.print("  2) Alphanumeric (A-Z, a-z, 0-9)")
+        console.print("  3) Lowercase + Digits (a-z, 0-9)")
+        console.print("  4) Letters only (A-Z, a-z)")
+        console.print("  5) Digits only (0-9)")
+        cs_sel = console.input("Select charset [default 1]: ").strip() or "1"
+
+        if cs_sel == "2":
+            charset = CHARSET_ALPHANUMERIC
+        elif cs_sel == "3":
+            charset = CHARSET_LOWER_NUM
+        elif cs_sel == "4":
+            charset = CHARSET_LETTERS
+        elif cs_sel == "5":
+            charset = CHARSET_DIGITS
+        else:
+            charset = CHARSET_ALL_PRINTABLE
+
+        min_s = int(console.input("Min suffix length [default 1]: ").strip() or "1")
+        max_s = int(console.input("Max suffix length [default 2]: ").strip() or "2")
+        strat = PatternStrategy(
+            base_prefix=base_prefix,
+            charset=charset,
+            min_suffix_len=min_s,
+            max_suffix_len=max_s,
+        )
+        params = {
+            "base_prefix": base_prefix,
+            "charset": charset,
+            "min_suffix_len": min_s,
+            "max_suffix_len": max_s,
+        }
 
     return strat, params, use_prioritizer
 
@@ -182,11 +206,14 @@ def run_single_attack(
     skip_attempts: int = 0,
     initial_elapsed: float = 0.0,
 ) -> CrackResult:
-    """Execute attack with a live Rich progress bar."""
-    candidate_stream = strategy.candidates()
+    """Execute a single hash attack run with live Rich progress UI."""
+    candidates = strategy.candidates()
+
     if use_prioritizer:
-        prioritizer = GuessPrioritizer(buffer_size=5000)
-        candidate_stream = prioritizer.prioritize_stream(candidate_stream)
+        prioritizer = GuessPrioritizer()
+        candidates = prioritizer.prioritize_stream(candidates)
+
+    console.print("\n[dim]Press Ctrl+C at any time to pause and save session checkpoint.[/dim]\n")
 
     est_total = strategy.estimated_total()
 
@@ -203,34 +230,26 @@ def run_single_attack(
         transient=False,
     ) as progress:
         task_id = progress.add_task(
-            f"[cyan]Auditing with {strategy.name}...[/cyan]",
+            f"Auditing with [bold]{strategy.name}[/bold]...",
             total=est_total,
-            completed=skip_attempts,
             attempts=skip_attempts,
             speed=0.0,
         )
 
-        def on_progress(
-            attempts: int,
-            elapsed: float,
-            speed: float,
-            last_cand: Optional[str],
-            total_est: Optional[int],
-        ) -> None:
+        def on_progress(attempts: int, elapsed: float, speed: float, last_cand: Optional[str], est_total_val: Optional[int]) -> None:
+            completed_val = min(attempts, est_total) if est_total else attempts
             progress.update(
                 task_id,
-                completed=min(attempts, total_est) if total_est else attempts,
+                completed=completed_val,
                 attempts=attempts,
                 speed=speed,
             )
 
-        manager = ExecutionManager(progress_callback=on_progress, progress_interval=0.2)
-        console.print("[dim]Press Ctrl+C at any time to pause and save session checkpoint.[/dim]\n")
-
+        manager = ExecutionManager(progress_callback=on_progress)
         result = manager.run(
             target_hash=target_hash,
             algorithm=algorithm,
-            candidates_generator=candidate_stream,
+            candidates_generator=candidates,
             strategy_name=strategy.name,
             strategy_params=strategy_params,
             estimated_total=est_total,
@@ -243,19 +262,7 @@ def run_single_attack(
 
 
 def display_result(result: CrackResult, allow_interactive_export: bool = True) -> None:
-    """Display result screen matching UIUX specification."""
-    if result.interrupted:
-        console.print(
-            Panel(
-                f"[yellow]Execution paused by user.[/yellow]\n"
-                f"Progress saved to checkpoint: [bold]{result.checkpoint_file}[/bold]\n"
-                f"Resume anytime using Option 3 from the main menu.",
-                title="[bold yellow]Session Saved[/bold yellow]",
-                border_style="yellow",
-            )
-        )
-        return
-
+    """Display clean Rich audit outcome card matching UIUX specification."""
     score = score_password(
         result.password,
         strategy_used=result.strategy_name,
@@ -264,73 +271,89 @@ def display_result(result: CrackResult, allow_interactive_export: bool = True) -
     )
 
     if result.found:
-        table = Table(show_header=False, box=None)
-        table.add_row("[bold green]Status:[/bold green]", "[green]Password Recovered[/green]")
-        table.add_row("Target Hash:", f"[dim]{result.target_hash}[/dim]")
-        table.add_row("Algorithm:", result.algorithm)
-        table.add_row("Password (Masked):", f"[bold cyan]{mask_password_display(result.password)}[/bold cyan] [dim](plain in export)[/dim]")
-        table.add_row("Strategy:", result.strategy_name)
-        table.add_row("Attempts:", f"{result.attempts:,}")
-        table.add_row("Elapsed Time:", f"{result.elapsed_seconds:.2f}s  ({result.speed:,.0f} H/s)")
-        
-        rating_color = "red" if score.rating in ("CRITICAL", "WEAK") else ("yellow" if score.rating == "MODERATE" else "green")
-        table.add_row("Security Strength:", f"[{rating_color}][bold]{score.rating}[/bold] (Score: {score.score}/100)[/{rating_color}]")
-        table.add_row("Assessment:", score.reasoning)
-        if score.detected_patterns:
-            table.add_row("Patterns:", ", ".join(score.detected_patterns))
-        if score.policy_violations:
-            table.add_row("Policy Violations:", f"[red]{'; '.join(score.policy_violations)}[/red]")
-
-        console.print(Panel(table, title="[bold green][OK] Hash Audit Result[/bold green]", border_style="green"))
-
+        title = "[bold green][OK] Hash Audit Result[/bold green]"
+        status_text = "[bold green]Password Recovered[/bold green]"
+        masked = mask_password_display(result.password)
+    elif result.interrupted:
+        title = "[bold yellow][PAUSED] Session Checkpointed[/bold yellow]"
+        status_text = "[bold yellow]Interrupted & Saved[/bold yellow]"
+        masked = "<session paused>"
     else:
-        table = Table(show_header=False, box=None)
-        table.add_row("[bold red]Status:[/bold red]", "[red]Not Recovered within current settings[/red]")
-        table.add_row("Target Hash:", f"[dim]{result.target_hash}[/dim]")
-        table.add_row("Algorithm:", result.algorithm)
-        table.add_row("Strategy:", result.strategy_name)
-        table.add_row("Attempts:", f"{result.attempts:,}")
-        table.add_row("Elapsed Time:", f"{result.elapsed_seconds:.2f}s  ({result.speed:,.0f} H/s)")
-        table.add_row("Recommendations:", "Try a larger charset, longer max length, or expanded wordlist.")
-        console.print(Panel(table, title="[bold red][X] Hash Audit Result[/bold red]", border_style="red"))
+        title = "[bold red][X] Hash Audit Result[/bold red]"
+        status_text = "[bold red]Not Recovered within current settings[/bold red]"
+        masked = "<not recovered>"
 
-    # Offer export only when interactive prompt is desired
+    # Render audit details table
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("Key", style="bold cyan", width=20)
+    table.add_column("Value")
+
+    table.add_row("Status:", status_text)
+    table.add_row("Target Hash:", result.target_hash)
+    table.add_row("Algorithm:", result.algorithm)
+    table.add_row("Password (Masked):", f"{masked} [dim](plain in export)[/dim]" if result.found else masked)
+    table.add_row("Strategy:", result.strategy_name)
+    table.add_row("Attempts:", f"{result.attempts:,}")
+    table.add_row("Elapsed Time:", f"{result.elapsed_seconds:.2f}s  [dim]({result.speed:,.0f} H/s)[/dim]")
+
+    if result.found:
+        color = "red" if score.rating == "CRITICAL" else ("yellow" if score.rating == "WEAK" else "green")
+        table.add_row("Security Strength:", f"[{color}]{score.rating}[/{color}] (Score: {score.score}/100)")
+        if score.detected_patterns:
+            table.add_row("Patterns Found:", ", ".join(score.detected_patterns))
+        table.add_row("Assessment:", score.reasoning)
+        if score.policy_violations:
+            table.add_row("Policy Violations:", "; ".join(score.policy_violations))
+    elif result.interrupted:
+        table.add_row("Run ID:", result.run_id or "")
+        table.add_row("Checkpoint:", f"[dim]{result.checkpoint_file}[/dim]")
+        table.add_row("Resume With:", f"python run.py (Menu option 3)")
+    else:
+        table.add_row("Recommendations:", "Try a larger charset, longer max length, or token masks.")
+
+    console.print(Panel(table, title=title, border_style="green" if result.found else ("yellow" if result.interrupted else "red")))
+
+    # Auto-save last text report
+    record = build_audit_record(result, score)
+    export_text([record], LAST_REPORT_FILE)
+
     if allow_interactive_export:
         prompt_export([result])
 
 
 def prompt_export(results: List[CrackResult]) -> None:
-    """Prompt user to export results to CSV, JSON, or Text report."""
-    exp = console.input("\nExport audit report? (c=CSV, j=JSON, t=Text, n=No) [n]: ").strip().lower()
-    if exp in ("c", "csv"):
-        path = console.input("Save CSV path [reports/audit_report.csv]: ").strip() or "reports/audit_report.csv"
-        records = [build_audit_record(r) for r in results]
-        out = export_csv(records, path)
-        console.print(f"[bold green]✓ CSV report saved to:[/bold green] {out}")
-    elif exp in ("j", "json"):
-        path = console.input("Save JSON path [reports/audit_report.json]: ").strip() or "reports/audit_report.json"
-        records = [build_audit_record(r) for r in results]
-        out = export_json(records, path)
-        console.print(f"[bold green]✓ JSON report saved to:[/bold green] {out}")
-    elif exp in ("t", "txt", "y", "text"):
-        path = console.input("Save Text report path [reports/audit_report.txt]: ").strip() or "reports/audit_report.txt"
-        records = [build_audit_record(r) for r in results]
-        out = export_text(records, path)
-        # Also cache as last report
-        export_text(records, LAST_REPORT_FILE)
-        console.print(f"[bold green]✓ Text report saved to:[/bold green] {out}")
+    """Prompt user to export findings to CSV, JSON, or Text report."""
+    choice = console.input("\nExport audit report? ([bold]c[/bold]=CSV, [bold]j[/bold]=JSON, [bold]t[/bold]=Text, [bold]n[/bold]=No) : ").strip().lower()
+    if not choice or choice == "n":
+        return
+
+    os.makedirs("reports", exist_ok=True)
+    ts = int(time.time())
+    records = [build_audit_record(r) for r in results]
+
+    if choice == "c":
+        path = f"reports/audit_report_{ts}.csv"
+        export_csv(records, path)
+        console.print(f"[bold green]Saved CSV report to:[/bold green] {path}")
+    elif choice == "j":
+        path = f"reports/audit_report_{ts}.json"
+        export_json(records, path)
+        console.print(f"[bold green]Saved JSON report to:[/bold green] {path}")
+    elif choice == "t":
+        path = f"reports/audit_report_{ts}.txt"
+        export_text(records, path)
+        console.print(f"[bold green]Saved Text report to:[/bold green] {path}")
 
 
 def batch_audit_flow() -> None:
-    """Batch mode: audit multiple hashes from a file or user input."""
-    console.print("\n[bold cyan]=== Batch Hash Audit ===[/bold cyan]")
-    path = console.input("Enter path to file containing hashes (one per line): ").strip()
-    if not os.path.exists(path):
-        console.print(f"[red]File not found: {path}[/red]")
+    """Execute batch audit from input file of hashes."""
+    filepath = console.input("Path to hash file (one per line): ").strip()
+    if not os.path.exists(filepath):
+        console.print("[red]File not found.[/red]")
         return
 
-    hashes: List[str] = []
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+    hashes = []
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             h = line.strip()
             if h and not h.startswith("#"):
@@ -340,43 +363,41 @@ def batch_audit_flow() -> None:
         console.print("[yellow]No hashes found in file.[/yellow]")
         return
 
-    console.print(f"Loaded [bold green]{len(hashes)}[/bold green] hashes.")
-    default_algo = detect_hash_type(hashes[0])[0][0].lower().split()[0]
-    if default_algo in ("unknown", "salt-separated"):
-        default_algo = "sha256"
-
-    algo_input = console.input(f"Algorithm for batch [[bold green]{default_algo}[/bold green]]: ").strip()
-    algorithm = normalize_algo_name(algo_input if algo_input else default_algo)
-
+    console.print(f"\n[bold green]Loaded {len(hashes)} target hashes.[/bold green]")
     strategy, params, use_prio = build_strategy_interactive()
 
     results: List[CrackResult] = []
-    console.print(f"\n[bold]Starting batch audit of {len(hashes)} hashes...[/bold]")
+    start_time = time.time()
 
-    for idx, h in enumerate(hashes, 1):
-        console.print(f"\n[bold]Processing [{idx}/{len(hashes)}]:[/bold] {h[:32]}...")
+    for idx, target_hash in enumerate(hashes, 1):
+        detected = detect_hash_type(target_hash)
+        algo = detected[0][0].lower().split()[0]
+        if algo in ("unknown", "salt-separated"):
+            algo = "sha256"
+
+        console.print(f"\n[bold]Auditing hash {idx}/{len(hashes)}:[/bold] [dim]{target_hash[:32]}...[/dim] ({algo})")
         res = run_single_attack(
-            target_hash=h,
-            algorithm=algorithm,
+            target_hash=target_hash,
+            algorithm=algo,
             strategy=strategy,
             strategy_params=params,
             use_prioritizer=use_prio,
         )
         results.append(res)
-        if res.interrupted:
-            console.print("[yellow]Batch interrupted by user.[/yellow]")
-            break
 
-    # Summary table
+    total_time = time.time() - start_time
     cracked_count = sum(1 for r in results if r.found)
     total_count = len(results)
-    pct = (cracked_count / total_count * 100) if total_count > 0 else 0.0
 
-    summary_table = Table(title="[bold green]Batch Audit Summary[/bold green]")
+    console.print("\n" + "=" * 50)
+    console.print("  [bold cyan]Batch Audit Summary[/bold cyan]")
+    console.print("=" * 50)
+    summary_table = Table(show_header=False, box=None)
     summary_table.add_column("Metric", style="bold")
-    summary_table.add_column("Value", style="cyan")
-    summary_table.add_row("Total Hashes Processed", str(total_count))
-    summary_table.add_row("Successfully Recovered", f"{cracked_count} ({pct:.1f}%)")
+    summary_table.add_column("Value")
+    summary_table.add_row("Total Hashes Tested", str(total_count))
+    summary_table.add_row("Recovered Passwords", f"[bold green]{cracked_count}[/bold green] ({cracked_count/total_count*100:.1f}%)")
+    summary_table.add_row("Total Elapsed Time", f"{total_time:.2f}s")
     summary_table.add_row("Unrecovered", str(total_count - cracked_count))
 
     console.print(summary_table)
@@ -435,20 +456,25 @@ def resume_session_flow() -> None:
     elapsed = cp.get("elapsed_seconds", 0.0)
 
     # Reconstruct strategy
-    if "Mask" in strat_name:
+    if "Pattern" in strat_name:
+        strategy = PatternStrategy(
+            base_prefix=params.get("base_prefix", ""),
+            charset=params.get("charset", CHARSET_ALL_PRINTABLE),
+            min_suffix_len=params.get("min_suffix_len", 1),
+            max_suffix_len=params.get("max_suffix_len", 2),
+        )
+    elif "Mask" in strat_name:
         strategy = MaskStrategy(mask=params.get("mask", "?u?l?l?d?d"))
     elif "Hybrid" in strat_name:
         strategy = HybridStrategy(
-            wordlist=params.get("wordlist", DEFAULT_WORDLIST),
+            base_words=params.get("base_words", "admin"),
             suffix_mask=params.get("suffix_mask", "?d?d?d?d"),
         )
     elif "Rules" in strat_name or "mutat" in strat_name.lower():
-        strategy = RulesStrategy(wordlist=params.get("wordlist", DEFAULT_WORDLIST))
-    elif "Dictionary" in strat_name:
-        strategy = DictionaryStrategy(wordlist=params.get("wordlist", DEFAULT_WORDLIST))
+        strategy = RulesStrategy(base_words=params.get("base_words"))
     else:
         strategy = BruteForceStrategy(
-            charset=params.get("charset", "abcdefghijklmnopqrstuvwxyz0123456789"),
+            charset=params.get("charset", CHARSET_LOWER_NUM),
             min_length=params.get("min_length", 1),
             max_length=params.get("max_length", 4),
         )
@@ -477,7 +503,7 @@ def view_last_report() -> None:
 
 
 def run_demo() -> None:
-    """Run an automated demo showcasing hash detection, rules, mask, and hybrid attacks."""
+    """Run an automated demo showcasing hash detection, pattern streaming, and rule attacks."""
     console.print(Panel("[bold yellow]Running HashSentry Feature Demonstration[/bold yellow]"))
 
     samples = [
@@ -492,15 +518,10 @@ def run_demo() -> None:
         names = ", ".join(f"{n} ({c})" for n, c in res)
         console.print(f"  {s[:36]}...  ->  [bold]{names}[/bold]")
 
-    console.print("\n[bold cyan]2. Dictionary + Rules Attack on MD5 ('Football2025'):[/bold cyan]")
-    from hashsentry.core.hasher import hash_password
-    target = hash_password("Football2025", "md5")
-    if os.path.exists(DEFAULT_WORDLIST):
-        strat = RulesStrategy(wordlist=DEFAULT_WORDLIST)
-    else:
-        strat = RulesStrategy(wordlist=["football", "password", "admin", "dragon", "shadow", "sunshine"])
+    console.print("\n[bold cyan]2. In-Memory Pattern Streaming on SHA-1 (Prefix 'bante' + 94-char ASCII):[/bold cyan]")
+    strat = PatternStrategy(base_prefix="bante", charset=CHARSET_ALL_PRINTABLE, min_suffix_len=1, max_suffix_len=1)
     manager = ExecutionManager()
-    res = manager.run(target, "md5", strat.candidates(), strategy_name=strat.name)
+    res = manager.run("fd1fa8af619ee320f1fab31824616394cc62716a", "sha1", strat.candidates(), strategy_name=strat.name)
     display_result(res, allow_interactive_export=False)
 
 
@@ -558,10 +579,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="HashSentry — Password Hash Security Auditing Tool")
     parser.add_argument("-t", "--target", help="Target password hash")
     parser.add_argument("-a", "--algo", help="Algorithm (md5, sha1, sha256, sha512, bcrypt, argon2, ntlm, etc.)")
-    parser.add_argument("-m", "--mode", choices=["rules", "dictionary", "brute", "mask", "hybrid"], help="Attack mode")
-    parser.add_argument("-w", "--wordlist", default=DEFAULT_WORDLIST, help="Path to wordlist file")
+    parser.add_argument("-m", "--mode", choices=["pattern", "rules", "brute", "mask", "hybrid"], default="pattern", help="Attack mode")
+    parser.add_argument("-p", "--prefix", default="", help="Base prefix for pattern strategy (e.g. 'bante')")
+    parser.add_argument("--min-suffix", type=int, default=1, help="Min suffix length for pattern strategy")
+    parser.add_argument("--max-suffix", type=int, default=2, help="Max suffix length for pattern strategy")
+    parser.add_argument("--base-words", default="", help="Base word(s) for rules or hybrid attack")
     parser.add_argument("--mask", default="?u?l?l?d?d", help="Mask for mask/hybrid attack")
-    parser.add_argument("--charset", default="abcdefghijklmnopqrstuvwxyz0123456789", help="Charset for brute-force")
+    parser.add_argument("--charset", default=CHARSET_ALL_PRINTABLE, help="Charset for pattern/brute-force")
     parser.add_argument("--max-length", type=int, default=4, help="Max length for brute-force")
     parser.add_argument("--prioritize", action="store_true", help="Enable frequency-based candidate prioritization")
     parser.add_argument("--batch", help="Path to file containing hashes for batch audit")
@@ -583,23 +607,33 @@ def main() -> None:
         show_disclaimer()
         target_hash = args.target
         algo = normalize_algo_name(args.algo if args.algo else detect_hash_type(target_hash)[0][0].split()[0])
-        mode = args.mode or "rules"
+        mode = args.mode or "pattern"
 
-        if mode == "dictionary":
-            strategy = DictionaryStrategy(wordlist=args.wordlist)
-            params = {"wordlist": args.wordlist}
+        if mode == "pattern":
+            strategy = PatternStrategy(
+                base_prefix=args.prefix,
+                charset=args.charset,
+                min_suffix_len=args.min_suffix,
+                max_suffix_len=args.max_suffix,
+            )
+            params = {
+                "base_prefix": args.prefix,
+                "charset": args.charset,
+                "min_suffix_len": args.min_suffix,
+                "max_suffix_len": args.max_suffix,
+            }
         elif mode == "brute":
-            strategy = BruteForceStrategy(charset=args.charset, max_length=args.max_length)
-            params = {"charset": args.charset, "max_length": args.max_length}
+            strategy = BruteForceStrategy(charset=args.charset, min_length=1, max_length=args.max_length)
+            params = {"charset": args.charset, "min_length": 1, "max_length": args.max_length}
         elif mode == "mask":
             strategy = MaskStrategy(mask=args.mask)
             params = {"mask": args.mask}
         elif mode == "hybrid":
-            strategy = HybridStrategy(wordlist=args.wordlist, suffix_mask=args.mask)
-            params = {"wordlist": args.wordlist, "suffix_mask": args.mask}
-        else:
-            strategy = RulesStrategy(wordlist=args.wordlist)
-            params = {"wordlist": args.wordlist}
+            strategy = HybridStrategy(base_words=args.base_words or "admin", suffix_mask=args.mask)
+            params = {"base_words": args.base_words or "admin", "suffix_mask": args.mask}
+        else:  # rules
+            strategy = RulesStrategy(base_words=args.base_words if args.base_words else None)
+            params = {"base_words": args.base_words}
 
         result = run_single_attack(
             target_hash=target_hash,

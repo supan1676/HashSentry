@@ -93,33 +93,24 @@ class MaskStrategy(BaseStrategy):
 
 class HybridStrategy(BaseStrategy):
     """
-    Candidate generator for hybrid attacks: Dictionary word + Mask suffix.
+    Candidate generator for hybrid attacks: Base word(s) + Mask suffix.
     """
 
-    def __init__(self, wordlist: Union[str, List[str]], suffix_mask: str = "?d?d?d?d"):
+    def __init__(self, base_words: Union[str, List[str]], suffix_mask: str = "?d?d?d?d"):
         super().__init__(name="Hybrid Attack")
-        self.wordlist_source = wordlist
+        if isinstance(base_words, str):
+            self.base_words = [w.strip() for w in base_words.replace(",", " ").split() if w.strip()]
+        else:
+            self.base_words = [w.strip() for w in base_words if w.strip()]
         self.suffix_mask = suffix_mask
         self._suffix_positions = parse_mask(suffix_mask)
 
-    def _get_base_words(self) -> List[str]:
-        if isinstance(self.wordlist_source, list):
-            return [w.strip() for w in self.wordlist_source if w.strip()]
-        if isinstance(self.wordlist_source, str):
-            if not os.path.exists(self.wordlist_source):
-                raise FileNotFoundError(f"Wordlist not found: {self.wordlist_source}")
-            with open(self.wordlist_source, "r", encoding="utf-8", errors="ignore") as f:
-                return [line.strip() for line in f if line.strip()]
-        return []
-
     def estimated_total(self) -> Optional[int]:
-        words = self._get_base_words()
         suffix_count = 1
         for p in self._suffix_positions:
             suffix_count *= len(p)
-        return len(words) * suffix_count
+        return len(self.base_words) * suffix_count
 
     def candidates(self) -> Generator[str, None, None]:
-        words = self._get_base_words()
-        for candidate in hybrid_candidates(words, self.suffix_mask):
+        for candidate in hybrid_candidates(self.base_words, self.suffix_mask):
             yield candidate

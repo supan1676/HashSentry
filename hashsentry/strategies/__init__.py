@@ -1,11 +1,19 @@
 """
 Strategies module for HashSentry.
-Exports all attack strategies and common interfaces.
+Exports all in-memory streaming attack strategies and common interfaces.
 """
 
 from hashsentry.strategies.base import BaseStrategy
 from hashsentry.strategies.brute_force import BruteForceStrategy
-from hashsentry.strategies.dictionary import DictionaryStrategy
+from hashsentry.strategies.pattern import (
+    CHARSET_ALL_PRINTABLE,
+    CHARSET_ALPHANUMERIC,
+    CHARSET_DIGITS,
+    CHARSET_LETTERS,
+    CHARSET_LOWER_NUM,
+    CHARSET_SYMBOLS,
+    PatternStrategy,
+)
 from hashsentry.strategies.rules import RulesStrategy, apply_rules, mutated_wordlist
 from hashsentry.strategies.mask_hybrid import (
     MaskStrategy,
@@ -17,11 +25,17 @@ from hashsentry.strategies.mask_hybrid import (
 
 __all__ = [
     "BaseStrategy",
+    "PatternStrategy",
     "BruteForceStrategy",
-    "DictionaryStrategy",
     "RulesStrategy",
     "MaskStrategy",
     "HybridStrategy",
+    "CHARSET_ALL_PRINTABLE",
+    "CHARSET_ALPHANUMERIC",
+    "CHARSET_LOWER_NUM",
+    "CHARSET_LETTERS",
+    "CHARSET_DIGITS",
+    "CHARSET_SYMBOLS",
     "apply_rules",
     "mutated_wordlist",
     "parse_mask",

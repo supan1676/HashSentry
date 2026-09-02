@@ -1,9 +1,14 @@
 """
-Unit tests for attack strategies.
+Unit tests for in-memory attack strategies.
 """
 
 from hashsentry.strategies.brute_force import BruteForceStrategy
-from hashsentry.strategies.dictionary import DictionaryStrategy
+from hashsentry.strategies.pattern import (
+    CHARSET_ALL_PRINTABLE,
+    CHARSET_DIGITS,
+    CHARSET_LOWER_NUM,
+    PatternStrategy,
+)
 from hashsentry.strategies.mask_hybrid import HybridStrategy, MaskStrategy, parse_mask
 from hashsentry.strategies.rules import RulesStrategy, apply_rules, leetspeak
 
@@ -15,11 +20,20 @@ def test_brute_force_strategy():
     assert cands == ["a", "b", "aa", "ab", "ba", "bb"]
 
 
-def test_dictionary_strategy():
-    words = ["admin", "password", "root"]
-    strat = DictionaryStrategy(wordlist=words)
-    assert strat.estimated_total() == 3
-    assert list(strat.candidates()) == words
+def test_pattern_strategy_with_prefix():
+    strat = PatternStrategy(base_prefix="bante", charset="ab", min_suffix_len=1, max_suffix_len=2)
+    assert strat.estimated_total() == 6  # 2^1 + 2^2 = 6
+    cands = list(strat.candidates())
+    assert cands == ["bantea", "banteb", "banteaa", "banteab", "banteba", "bantebb"]
+
+
+def test_pattern_strategy_full_ascii():
+    strat = PatternStrategy(base_prefix="test", charset=CHARSET_DIGITS, min_suffix_len=1, max_suffix_len=1)
+    assert strat.estimated_total() == 10
+    cands = list(strat.candidates())
+    assert len(cands) == 10
+    assert "test0" in cands
+    assert "test9" in cands
 
 
 def test_rules_strategy():
@@ -32,7 +46,7 @@ def test_rules_strategy():
     assert "Dragon2025" in res
     assert "Dragon!" in res
 
-    strat = RulesStrategy(wordlist=["dragon"])
+    strat = RulesStrategy(base_words=["dragon"])
     cands = list(strat.candidates())
     assert "Dragon2025" in cands
 
@@ -56,7 +70,7 @@ def test_mask_strategy():
 
 
 def test_hybrid_strategy():
-    strat = HybridStrategy(wordlist=["pin"], suffix_mask="?d?d")
+    strat = HybridStrategy(base_words=["pin"], suffix_mask="?d?d")
     assert strat.estimated_total() == 100
     cands = list(strat.candidates())
     assert len(cands) == 100

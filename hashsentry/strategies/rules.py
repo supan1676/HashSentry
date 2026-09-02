@@ -1,11 +1,10 @@
 """
 Rule-Based Mutation Engine - HashSentry
 =======================================
-Applies realistic human mutation patterns to dictionary words:
+Applies realistic human mutation patterns to seed words completely in-memory:
 capitalization variants, year/digit suffixes, leetspeak, reversals, and combinations.
 """
 
-import os
 from typing import Generator, Iterable, List, Optional, Set, Union
 from hashsentry.strategies.base import BaseStrategy
 
@@ -18,6 +17,13 @@ COMMON_SUFFIXES = [
 
 COMMON_PREFIXES = [
     "1", "!", "@", "2024", "2025", "the", "The"
+]
+
+DEFAULT_CORE_SEEDS = [
+    "password", "admin", "welcome", "football", "dragon", "baseball",
+    "master", "sunshine", "princess", "superman", "shadow", "freedom",
+    "computer", "summer", "winter", "access", "secret", "hello",
+    "test", "pass", "login", "trustno1", "matrix", "ninja", "security"
 ]
 
 
@@ -76,32 +82,26 @@ def mutated_wordlist(words: Iterable[str]) -> Generator[str, None, None]:
 
 class RulesStrategy(BaseStrategy):
     """
-    Applies rule-based mutations across a base wordlist or word generator.
+    Applies rule-based mutations across in-memory base seed words.
     """
 
-    def __init__(self, wordlist: Union[str, List[str]]):
-        super().__init__(name="Dictionary + Rules")
-        self.wordlist_source = wordlist
-
-    def _get_base_words(self) -> List[str]:
-        if isinstance(self.wordlist_source, list):
-            return [w.strip() for w in self.wordlist_source if w.strip()]
-        if isinstance(self.wordlist_source, str):
-            if not os.path.exists(self.wordlist_source):
-                raise FileNotFoundError(f"Wordlist not found: {self.wordlist_source}")
-            with open(self.wordlist_source, "r", encoding="utf-8", errors="ignore") as f:
-                return [line.strip() for line in f if line.strip()]
-        return []
+    def __init__(self, base_words: Optional[Union[str, List[str]]] = None):
+        super().__init__(name="Smart Rules Mutation")
+        if base_words is None:
+            self._seeds = list(DEFAULT_CORE_SEEDS)
+        elif isinstance(base_words, str):
+            self._seeds = [w.strip() for w in base_words.replace(",", " ").split() if w.strip()]
+            if not self._seeds:
+                self._seeds = list(DEFAULT_CORE_SEEDS)
+        else:
+            self._seeds = [w.strip() for w in base_words if w.strip()]
+            if not self._seeds:
+                self._seeds = list(DEFAULT_CORE_SEEDS)
 
     def estimated_total(self) -> Optional[int]:
-        # Approximate: on average ~30-40 mutations per unique word
-        try:
-            base_count = len(self._get_base_words())
-            return base_count * 35
-        except Exception:
-            return None
+        # On average ~35 unique mutations per unique seed word
+        return len(self._seeds) * 35
 
     def candidates(self) -> Generator[str, None, None]:
-        base_words = self._get_base_words()
-        for candidate in mutated_wordlist(base_words):
+        for candidate in mutated_wordlist(self._seeds):
             yield candidate
